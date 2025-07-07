@@ -1,0 +1,8 @@
+pydantic
+dotenv
+openai>=1.68.2
+openai-agents>=0.0.15
+pytest 
+pytest-asyncio
+brevo-python==1.1.2
+gradio>=5.22.0
