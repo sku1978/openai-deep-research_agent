@@ -38,5 +38,5 @@ async def main(message: str):
 
 
 if __name__ == "__main__":
-    query = "What are all the countries in whole wide world in 2025?"
+    query = "What is the future of renewable energy technologies in Europe?"
     asyncio.run(main(query))
