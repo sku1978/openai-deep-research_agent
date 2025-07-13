@@ -2,6 +2,7 @@ from agents import Runner, trace, gen_trace_id
 from search_agent import search_agent
 from planner_agent import planner_agent, WebSearchItem, WebSearchPlan
 from writer_agent import writer_agent, ReportData
+from followup_agent import followup_agent, FollowUpQuestions
 from email_agent import email_agent
 import asyncio
 
@@ -82,3 +83,21 @@ class ResearchManager:
         )
         print("Email sent")
         return report
+    
+    async def ask_followup_questions(self, query: str) -> FollowUpQuestions:
+        """Run the follow-up question agent."""
+        print("Generating follow-up questions...")
+        result = await Runner.run(
+            followup_agent,
+            query,
+        )
+        print("Follow-up questions generated.")
+        return result.final_output_as(FollowUpQuestions)
+    
+    def combine_query_with_followups(self, query: str, extra_text: str) -> str:
+        """
+        Combine the original query and user-provided clarifications into a single text.
+        """
+        merged = f"Original research topic:\n{query}\n\n"
+        merged += f"User clarifications and context:\n{extra_text.strip()}"
+        return merged
