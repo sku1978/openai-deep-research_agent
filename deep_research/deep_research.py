@@ -1,80 +1,116 @@
-# deep_research.py
-
-import gradio as gr
 from dotenv import load_dotenv
-from research_manager import ResearchManager
+from agents import trace, Runner
+from followup_agent import followup_agent
+from writer_agent import ReportData
+from research_manager import research_manager_agent
+import asyncio
+import gradio as gr
 
-load_dotenv(override=True)
+load_dotenv()
 
-mgr = ResearchManager()
+STATE_IDLE = "idle"
+STATE_AWAITING_FOLLOWUPS = "awaiting_followups"
 
-with gr.Blocks(theme=gr.themes.Default(primary_hue="sky")) as ui:
-    gr.Markdown("# Deep Research Agent")
+def run_async(fn, *args, **kwargs):
+    return asyncio.run(fn(*args, **kwargs))
 
-    # STEP 1 — Initial user topic
-    topic_input = gr.Textbox(
-        label="What topic would you like to research?",
-        placeholder="E.g. The future of renewable energy technologies in Europe"
+async def get_formatted_followup_questions(topic: str) -> str:
+    with trace("Deep Research Followup Questions"):
+        result = await Runner.run(followup_agent, topic)
+    
+    # final_output is a list of FollowUpQuestion objects
+    list_of_questions = [q.question for q in result.final_output.questions]
+
+    formatted = "\n".join(f"- {q}" for q in list_of_questions)
+
+    return formatted
+
+# sync wrapper for Gradio
+def get_formatted_followup_questions_sync(topic: str) -> str:
+    return run_async(get_formatted_followup_questions, topic)
+
+def format_final_output(final_output: ReportData) -> str:
+    """
+    Formats the final ReportData into a human-readable string.
+    """
+    summary = final_output.short_summary
+    markdown_report = final_output.markdown_report
+    follow_ups = final_output.follow_up_questions
+
+    formatted_followups = ""
+    if follow_ups:
+        formatted_followups = "\n".join(f"- {q}" for q in follow_ups)
+
+    formatted = (
+        f"✅ **Short Summary**\n{summary}\n\n"
+        f"✅ **Report**\n{markdown_report}\n\n"
     )
-    next_button = gr.Button("Next: Suggest Follow-up Questions", variant="primary")
 
-    # STEP 2 — Display follow-up questions and extra info box
-    followup_md = gr.Markdown(visible=False)
-    extra_info_input = gr.Textbox(
-        label="Add any extra details or clarifications based on the follow-up questions above.",
-        placeholder="Write anything you’d like the research to focus on...",
-        visible=False,
-        lines=4,
-    )
-    run_button = gr.Button("Run Research", variant="primary", visible=False)
+    if formatted_followups:
+        formatted += f"✅ **Follow-Up Questions**\n{formatted_followups}\n"
 
-    # STEP 3 — Show report
-    report_output = gr.Markdown(visible=False)
+    return formatted
 
-    # Step 1 → Step 2
-    async def generate_followups(query):
-        followups = await mgr.ask_followup_questions(query)
+async def run_full_research(topic: str):
+    with trace("Deep Research Full Run"):
+        return await Runner.run(research_manager_agent, topic)
 
-        # Build markdown string
-        markdown_text = "## Suggested Follow-up Questions\n"
-        markdown_text += "These are some questions you might answer to help refine your research:\n\n"
-        for i, q in enumerate(followups.questions, 1):
-            markdown_text += f"**{i}. {q.question}**\n\n"
+def chatbot(user_input, chat_history, state):
+    
+    if state["status"] == STATE_IDLE:
+        topic = user_input
 
-        # Return new markdown value, make visible=True, also show extra input box and run button
-        return (
-            gr.update(value=markdown_text, visible=True),
-            gr.update(visible=True),
-            gr.update(visible=True),
-            gr.update(visible=False)
+        formatted_questions = get_formatted_followup_questions_sync(topic)
+
+        chat_history.append({"role": "user", "content": topic})
+        formatted_questions = get_formatted_followup_questions_sync(topic)
+
+        chat_history.append({
+            "role": "assistant",
+            "content": f"Here are some follow-up questions:\n{formatted_questions}"
+        })
+
+        state["status"] = STATE_AWAITING_FOLLOWUPS
+        state["topic"] = topic
+
+        return "", chat_history, state
+
+    elif state["status"] == STATE_AWAITING_FOLLOWUPS:
+        user_followup_answers = user_input
+        topic = state["topic"]
+
+        revised_topic = topic + "\n\nAdditional Context:\n" + user_followup_answers
+
+        final_result = run_async(
+            run_full_research,
+            revised_topic
         )
 
-    next_button.click(
-        generate_followups,
-        inputs=topic_input,
-        outputs=[
-            followup_md,
-            extra_info_input,
-            run_button,
-            report_output
-        ]
-    )
+        formatted_output = format_final_output(final_result.final_output)
 
+        chat_history.append({"role": "user", "content": user_followup_answers})
+        chat_history.append({
+            "role": "assistant",
+            "content": f"Here’s the result of further research:\n{formatted_output}"
+        })
 
-    # Step 2 → Step 3
-    async def run_full_research(query, extra_text):
-        combined_query = mgr.combine_query_with_followups(query, extra_text)
-        chunks = []
-        async for chunk in mgr.run(combined_query):
-            chunks.append(chunk)
+        state["status"] = STATE_IDLE
+        state["topic"] = None
 
-        final_report = chunks[-1] if chunks else "No report generated."
-        return gr.update(value=final_report, visible=True)
+        return "", chat_history, state
 
-    run_button.click(
-        run_full_research,
-        inputs=[topic_input, extra_info_input],
-        outputs=[report_output]
-    )
+    else:
+        chat_history.append({"role": "assistant", "content": "I’m not sure what to do."})
+        return "", chat_history, state
 
-ui.launch(inbrowser=True)
+with gr.Blocks() as demo:
+    chatbot_ui = gr.Chatbot(type="messages")
+    state = gr.State({"status": STATE_IDLE, "topic": None})
+    txt = gr.Textbox(placeholder="Enter your research topic or answer follow-up questions")
+
+    def respond(message, history, state):
+        return chatbot(message, history, state)
+
+    txt.submit(respond, [txt, chatbot_ui, state], [txt, chatbot_ui, state])
+
+demo.launch()

@@ -14,7 +14,8 @@ def send_email_via_brevo_sdk(
 ):
     """
     Send an email using Brevo's official Python SDK (Transactional Emails).
-    Send out an email with the given subject and HTML body
+    Send out an email with the given subject and HTML body.
+    Never use attachement as a method to send the content - always use email body.
 
     Parameters:
     - subject (str): Email subject.
